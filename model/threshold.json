@@ -1,0 +1,7 @@
+{
+  "model_name": "EfficientNetV2B0",
+  "threshold": 0.074,
+  "val_f2": 0.9902857142857143,
+  "f_beta": 2.0,
+  "n_val_samples": 6300
+}
