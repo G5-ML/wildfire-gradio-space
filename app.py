@@ -1,19 +1,9 @@
 """
-Wildfire Detection - Gradio Space
-=================================
+Wildfire Detection - Gradio Space / Colab Deployment
+=====================================================
 Upload a satellite/aerial image -> EfficientNetV2B0 classifies it as
 wildfire / no-wildfire, with a Grad-CAM heatmap showing which region of
 the image the model actually looked at.
-
-Model input contract (must match how the model was trained - see the
-training project's config.py / model_utils.py / data_utils.py):
-  - RGB image resized to 224x224
-  - Raw pixel values in [0, 255], NOT manually rescaled/normalized -
-    EfficientNetV2's preprocessing (Rescaling + Normalization) is baked
-    into the model itself as its first layers, so feeding it already-
-    normalized input would double-preprocess and break predictions.
-  - Model output: a single sigmoid unit = P(wildfire). Label 0 = "nowildfire",
-    label 1 = "wildfire" (alphabetical class order, same as training).
 """
 
 import json
@@ -37,22 +27,6 @@ MODEL_NAME = "EfficientNetV2B0"
 
 
 def _load_decision_threshold(default: float = 0.5) -> float:
-    """Load the F2-optimized operating threshold from threshold.json if
-    present, to decide WHICH SIDE of the line counts as "wildfire" - but
-    note this only shifts the decision boundary. The confidence number
-    shown to users is always the model's raw probability for whichever
-    label got picked, never the threshold value itself (a tuned
-    precision/recall trade-off isn't something a viewer looking at one
-    photo can meaningfully interpret).
-
-    Tries a few common shapes since the exact schema isn't confirmed yet:
-        {"best_threshold": 0.37, ...}
-        {"threshold": 0.37, ...}
-        {"EfficientNetV2B0": {"best_threshold": 0.37, ...}, ...}
-        0.37   (bare number)
-    Logs exactly what it found (or didn't) so a schema mismatch is visible
-    in the Space's startup logs instead of silently using the wrong value.
-    """
     if not os.path.exists(THRESHOLD_PATH):
         print(f"[startup] No threshold file at '{THRESHOLD_PATH}' - using default {default}.")
         return default
@@ -79,19 +53,10 @@ def _load_decision_threshold(default: float = 0.5) -> float:
         print(f"[startup] Using decision threshold {val} from '{THRESHOLD_PATH}' (bare number).")
         return val
 
-    print(
-        f"[startup] WARNING: '{THRESHOLD_PATH}' didn't match any expected "
-        f"shape (looked for keys: best_threshold / threshold / "
-        f"optimal_threshold / f2_threshold / value, optionally nested "
-        f"under '{MODEL_NAME}'). Falling back to default {default}. "
-        f"Raw file contents: {data!r}"
-    )
+    print(f"[startup] WARNING: '{THRESHOLD_PATH}' fallback to default {default}.")
     return default
 
 
-# Standard fallback if no threshold.json is found: a plain 0.5 sigmoid
-# cutoff. If threshold.json IS found, its value replaces this as the
-# decision boundary - see _load_decision_threshold's docstring.
 DECISION_THRESHOLD = _load_decision_threshold(default=0.5)
 
 # ---------------------------------------------------------------------------
@@ -105,14 +70,13 @@ try:
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(
             f"No model file found at '{MODEL_PATH}'. Place your trained "
-            f".keras file there (or set the MODEL_PATH env var) before "
-            f"running this Space."
+            f".keras file there before running."
         )
     _model = tf.keras.models.load_model(MODEL_PATH, compile=False)
     _target_layer = find_last_spatial_layer(_model)
     print(f"[startup] Loaded model from '{MODEL_PATH}'. "
           f"Grad-CAM target layer: '{_target_layer}'.")
-except Exception as e:  # noqa: BLE001 - deliberately broad, surfaced in the UI
+except Exception as e:  # noqa: BLE001
     _model_error = str(e)
     print(f"[startup] ERROR loading model: {_model_error}")
 
@@ -121,9 +85,6 @@ except Exception as e:  # noqa: BLE001 - deliberately broad, surfaced in the UI
 # Inference
 # ---------------------------------------------------------------------------
 def _preprocess(image: Image.Image) -> np.ndarray:
-    """RGB, resized to the model's expected input, raw [0,255] float32,
-    batched to shape (1, H, W, 3). Bilinear resize matches the default
-    interpolation used by image_dataset_from_directory at training time."""
     img = image.convert("RGB").resize(IMG_SIZE, Image.BILINEAR)
     arr = np.asarray(img).astype("float32")
     return np.expand_dims(arr, axis=0)
@@ -139,12 +100,6 @@ def _verdict_card(prob_wildfire: float) -> str:
     else:
         label, css_class, icon = "NO WILDFIRE DETECTED", "verdict-safe", "✅"
 
-    # At a low operating threshold (favoring recall), a flagged image can
-    # still have raw probability well under 50% - e.g. threshold=0.074
-    # flags anything from 0.074 upward. Shown alone, "WILDFIRE DETECTED -
-    # 20% confidence" reads as contradictory. Only add this note in that
-    # specific tension case; the common cases (prob > 0.5 wildfire, or
-    # prob < threshold no-wildfire) stay exactly as before.
     note = ""
     if is_wildfire and prob_wildfire < 0.5:
         note = (
@@ -229,47 +184,30 @@ CUSTOM_CSS = """
     color: var(--smoke-text) !important;
 }
 
-#app-title {
-    text-align: center;
-    padding: 8px 0 0 0;
-}
+#app-title { text-align: center; padding: 8px 0 0 0; }
 #app-title h1 {
-    font-size: 2.3rem;
-    font-weight: 800;
-    margin-bottom: 2px;
+    font-size: 2.3rem; font-weight: 800; margin-bottom: 2px;
     background: linear-gradient(90deg, var(--ember-gold), var(--ember-orange) 60%, #d7263d);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
-#app-subtitle {
-    text-align: center;
-    color: var(--smoke-muted) !important;
-    margin-top: -6px;
-}
+#app-subtitle { text-align: center; color: var(--smoke-muted) !important; margin-top: -6px; }
 
 .panel {
     background: var(--smoke-panel) !important;
     border: 1px solid var(--smoke-border) !important;
-    border-radius: 18px !important;
-    padding: 14px !important;
+    border-radius: 18px !important; padding: 14px !important;
 }
 
 #analyze-btn {
     background: linear-gradient(90deg, var(--ember-orange), var(--ember-gold)) !important;
-    border: none !important;
-    color: #1a1210 !important;
-    font-weight: 700 !important;
-    font-size: 1.02rem !important;
+    border: none !important; color: #1a1210 !important;
+    font-weight: 700 !important; font-size: 1.02rem !important;
     box-shadow: 0 6px 18px rgba(255, 106, 61, 0.25);
 }
 
 .verdict-card {
-    text-align: center;
-    border-radius: 18px;
-    padding: 22px 16px;
-    border: 1px solid var(--smoke-border);
-    background: var(--smoke-panel-2);
+    text-align: center; border-radius: 18px; padding: 22px 16px;
+    border: 1px solid var(--smoke-border); background: var(--smoke-panel-2);
 }
 .verdict-icon { font-size: 2.4rem; line-height: 1; margin-bottom: 4px; }
 .verdict-label { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.02em; }
@@ -288,8 +226,7 @@ CUSTOM_CSS = """
 }
 .likelihood-pct { color: var(--smoke-text); font-weight: 700; }
 .likelihood-track {
-    position: relative;
-    width: 100%; height: 14px; border-radius: 999px;
+    position: relative; width: 100%; height: 14px; border-radius: 999px;
     background: #2b2320; overflow: visible; border: 1px solid var(--smoke-border);
 }
 .likelihood-fill {
@@ -323,7 +260,11 @@ CUSTOM_CSS = """
 }
 """
 
-with gr.Blocks(title="Wildfire Detection - EfficientNetV2B0") as demo:
+with gr.Blocks(
+    title="Wildfire Detection - EfficientNetV2B0",
+    css=CUSTOM_CSS,
+    theme=gr.themes.Base(primary_hue="orange", neutral_hue="stone"),
+) as demo:
     with gr.Column(elem_id="app-title"):
         gr.Markdown("# 🔥 Wildfire Detection")
         gr.Markdown(
@@ -362,20 +303,10 @@ with gr.Blocks(title="Wildfire Detection - EfficientNetV2B0") as demo:
     with gr.Accordion("ℹ️ How this works / limitations", open=False):
         gr.Markdown(
             """
-- **Model**: EfficientNetV2B0, fine-tuned on the
-  [Wildfire Prediction Dataset](https://www.kaggle.com/datasets/abdelghaniaaba/wildfire-prediction-dataset)
-  (satellite imagery of Quebec, Canada), two-stage transfer learning
-  (frozen backbone -> partial fine-tune).
-- **Grad-CAM**: highlights which pixels the model's last convolutional
-  layer relied on most for its prediction, by backpropagating the
-  prediction score to that layer and weighting its feature maps by their
-  gradients.
-- **Confidence score**: the model's raw output is a single probability,
-  P(wildfire). The confidence shown is that probability (or its complement)
-  for whichever label was predicted.
-- **This is a research/demo tool**, trained on one specific satellite
-  dataset. It is **not validated for operational wildfire detection or
-  emergency response** - do not use it to make real safety decisions.
+- **Model**: EfficientNetV2B0, fine-tuned on the Wildfire Prediction Dataset.
+- **Grad-CAM**: Highlights pixels the last conv layer relied on most.
+- **Confidence score**: Raw probability P(wildfire).
+- **Research/demo tool only**: Not validated for operational emergency response.
             """
         )
 
@@ -391,7 +322,4 @@ with gr.Blocks(title="Wildfire Detection - EfficientNetV2B0") as demo:
     )
 
 if __name__ == "__main__":
-    demo.launch(
-        css=CUSTOM_CSS,
-        theme=gr.themes.Base(primary_hue="orange", neutral_hue="stone"),
-    )
+    demo.launch(share=True)
