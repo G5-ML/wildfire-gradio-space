@@ -19,7 +19,7 @@ from gradcam import make_gradcam_heatmap, overlay_heatmap, find_last_spatial_lay
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-MODEL_PATH = os.environ.get("MODEL_PATH", "model/EfficientNetV2B0_wildfire.keras")
+MODEL_PATH = os.environ.get("MODEL_PATH", "model/stage2_finetune_best.keras")
 THRESHOLD_PATH = os.environ.get("THRESHOLD_PATH", "model/threshold.json")
 IMG_SIZE = (224, 224)
 CLASS_NAMES = ["nowildfire", "wildfire"]
