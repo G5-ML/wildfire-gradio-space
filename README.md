@@ -33,56 +33,6 @@ Upload a satellite/aerial image and get:
     └── threshold.json                     # <-- optional, see below
 ```
 
-## ⚠️ Before deploying: add your trained model
-
-This repo does **not** include a trained model — you need to drop your own
-`.keras` file at:
-
-```
-model/EfficientNetV2B0_wildfire.keras
-```
-
-From the training project, that's the file saved during/after
-`train_utils.train_two_stage` — e.g. copy in your best fine-tuned
-checkpoint:
-
-```
-<ARTIFACT_DRIVE_DIR>/EfficientNetV2B0/checkpoints/stage2_finetune_best.keras
-```
-
-(rename it to `EfficientNetV2B0_wildfire.keras`, or set the `MODEL_PATH`
-environment variable in your Space's settings to point at whatever filename
-you use instead).
-
-### Optional: `threshold.json`
-
-If you also drop a `model/threshold.json` file in (from your F2-optimized
-threshold search), the app will use it as the **decision boundary** — which
-side of the probability line counts as "wildfire" — instead of the default
-0.5 cutoff. It's read once at startup by `_load_decision_threshold()` in
-`app.py`, which accepts any of these shapes:
-
-```json
-{"best_threshold": 0.37}
-{"threshold": 0.37}
-{"EfficientNetV2B0": {"best_threshold": 0.37}}
-0.37
-```
-
-It checks `best_threshold`, `threshold`, `optimal_threshold`, `f2_threshold`,
-and `value` as key names (optionally nested under the model name). If your
-file uses a different shape, either rename the key or edit the `for key in
-(...)` line in `_load_decision_threshold`. **Check your Space's logs after
-first launch** — it prints exactly which threshold it loaded (or why it
-fell back to 0.5), so a schema mismatch is never silent.
-
-Note this only shifts *where the line is drawn* for the WILDFIRE /
-NO WILDFIRE label. The confidence percentage shown to users is always the
-model's raw probability for whichever label got picked — never the
-threshold value itself.
-
-**Model file is large (~25–30 MB)** — if you deploy via `git push` rather
-than the Spaces web UI drag-and-drop, track it with Git LFS first:
 
 ```bash
 git lfs install
