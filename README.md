@@ -1,6 +1,5 @@
 ---
-
-## title: Wildfire Detection
+title: PyroVision - Wildfire Detection
 emoji: 🔥
 colorFrom: red
 colorTo: yellow
@@ -9,35 +8,46 @@ sdk_version: 6.26.0
 app_file: app.py
 pinned: false
 license: mit
+---
 
-# 🔥 Wildfire Detection (EfficientNetV2B0 + Grad-CAM)
+# 🔥 PyroVision
 
-Upload a satellite/aerial image and get:
+**Wildfire detection and Grad-CAM explainability for satellite and aerial imagery.**
 
-* **Wildfire / No-wildfire** verdict
-* **Confidence score** (the model's own probability, aligned with your tuned threshold)
-* **Grad-CAM heatmap** showing which part of the image drove the decision
+Drop in a frame and PyroVision returns three things:
+
+* a **wildfire / no-wildfire verdict**
+* a **calibrated confidence score**, aligned with the model's tuned operating threshold
+* a **Grad-CAM heatmap** showing which pixels drove the decision
+
+Under the hood it is an EfficientNetV2B0 fine-tuned on the Quebec wildfire
+prediction dataset, served through Gradio.
 
 ## 📁 Files
 
 ```
 .
-├── app.py              # Gradio UI + inference
-├── gradcam.py           # Grad-CAM implementation (auto-detects the last conv layer)
+├── app.py               # model loading, inference, Gradio layout
+├── ui.py                # theme, webfonts, animated backdrop, HTML fragments
+├── style.css            # the "Ember Watch" design system
+├── gradcam.py           # Grad-CAM (auto-detects the last conv layer)
+├── assets/
+│   └── wildfire-sentinel-logo.png
+├── model/
+│   ├── stage2_finetune_best.keras   # trained weights
+│   └── threshold.json               # F2-optimised operating threshold
 ├── requirements.txt
-├── README.md
-└── model/
-    ├── stage2_finetune_best.keras   # Trained model weights
-    └── threshold.json               # F2-optimized operating threshold
-
+└── README.md
 ```
 
 ## 🚀 Run via Google Colab & Gradio Share
 
-Because this demo runs on a free Google Colab notebook with a T4 GPU using a public shareable URL, you don't need manual Hugging Face cloud deployments or paid hardware tiers.
+The demo runs on a free Colab T4 with a public share URL, so no Hugging Face
+paid hardware tier is needed.
 
-1. Open a new notebook in **[Google Colab](https://colab.research.google.com/)** and set **Runtime -> Change runtime type** to **T4 GPU**.
-2. Run the deployment block in your notebook:
+1. Open a notebook in **[Google Colab](https://colab.research.google.com/)** and
+   set **Runtime → Change runtime type → T4 GPU**.
+2. Run the deployment block:
 
 ```bash
 # Clone repository
@@ -47,20 +57,68 @@ Because this demo runs on a free Google Colab notebook with a T4 GPU using a pub
 # Install required dependencies
 !pip install -q gradio tensorflow opencv-python matplotlib
 
-# Set model path and launch app with a public shareable URL
+# Set model path and launch with a public shareable URL
 %env MODEL_PATH=model/stage2_finetune_best.keras
 !python app.py
-
 ```
 
-3. Colab will output a public URL (`[https://xxxx.gradio.live](https://xxxx.gradio.live)`) that stays active for up to 72 hours.
+3. Colab prints a public URL (`https://xxxx.gradio.live`) that stays live for
+   up to 72 hours.
+
+## 🎨 The interface
+
+The UI is a single committed dark design — it does not follow the visitor's
+OS colour scheme.
+
+**Palette — "Ember Watch."** Pulled from the brand mark: flame gold `#FFC24A`
+→ orange `#FF6B2C` → crimson `#E8402A` over a deep ember ground, with the
+logo's cyan orbit ring (`#3DDCE8`, and `#2FE0AE` for "clear") kept as the only
+cool accent. Warm therefore always means danger and cool always means safe, so
+the verdict never depends on hue alone.
+
+**Type.** Sora for display and headings, Inter for UI text, JetBrains Mono for
+numbers and telemetry. All three load from Google Fonts via `ui.HEAD`, with
+system fallbacks.
+
+**Motion.** The backdrop is drifting topographic contour lines, a slow
+satellite scan sweep, rising embers and a faint survey grid — all under 12%
+opacity. Uploads get a rotating ember rim; running an analysis shows a radar
+reticle while inference streams. Every decorative animation stops under
+`prefers-reduced-motion: reduce`.
+
+### Working on the UI
+
+Two things about Gradio are worth knowing before editing `style.css`:
+
+* **Gradio re-serialises custom CSS through the CSSOM.** A `background:`
+  shorthand whose value is a `var()` gets expanded into longhands, and the
+  pending-substitution longhands come back *empty* — the gradient silently
+  disappears. Use `background-image: var(--x)` instead. The same applies to
+  prefixed `mask` / `mask-composite` pairs.
+* **`gr.Group` draws its own border and background.** Panels use
+  `gr.Column(elem_classes="pv-card")` so `.pv-card` is the only chrome on
+  screen.
+
+`gr.HTML` renders through Svelte's `{@html ...}`, which applies `<style>` and
+`<svg>` but never executes `<script>` — so everything that moves does so with
+CSS and SVG only.
 
 ## How it works
 
-* **Preprocessing**: Image resized to 224×224, RGB, raw `[0, 255]` pixel values. EfficientNetV2's normalization is baked into the model architecture itself (`include_preprocessing=True`).
-* **Grad-CAM**: `gradcam.py` auto-detects the last spatial layer, computes gradients of the output with respect to feature maps, and creates an interpretable heatmap overlay.
-* **Decision Threshold**: Automatically loads F2-optimized thresholds from `threshold.json` to balance recall and precision for wildfire detection.
+* **Preprocessing.** Frames are resized to 224×224 RGB and passed as raw
+  `[0, 255]` pixels. EfficientNetV2's normalisation is baked into the
+  architecture (`include_preprocessing=True`).
+* **Grad-CAM.** `gradcam.py` auto-detects the last spatial layer, takes
+  gradients of the wildfire score with respect to its feature maps, and blends
+  the result over the frame at its native resolution.
+* **Decision threshold.** Loaded from `threshold.json` and optimised for
+  F-beta with beta=2. That favours recall, so a frame can be flagged while
+  `P(wildfire)` is still below 0.5 — the UI says so explicitly when it happens.
 
 ## Limitations
 
-This is a research/demo tool trained on a public satellite-imagery dataset (Quebec, Canada wildfire prediction dataset). It has not been validated for operational emergency response and must not be used for real-world safety decisions.
+This is a research and demonstration tool trained on one public
+satellite-imagery dataset (Quebec, Canada). It has **not** been validated for
+operational emergency response and must not be used for real-world safety
+decisions. Smoke, cloud, sunset light and old burn scars are all known
+confusers.
