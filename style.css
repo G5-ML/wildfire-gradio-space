@@ -82,7 +82,15 @@ html, body, gradio-app {
 }
 
 .gradio-container {
+  /* Centring this needs all three. Gradio makes <body> a flex container, so
+     max-width alone leaves the box grown to 1280px and pinned left, while
+     auto margins on their own switch off flex-grow and shrink it to its
+     content. width:100% sets the flex basis, max-width clamps it, and the
+     auto margins split whatever is left over evenly. */
+  width: 100% !important;
   max-width: 1280px !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
   background: transparent !important;
   color: var(--pv-ink) !important;
   font-family: var(--pv-body) !important;
