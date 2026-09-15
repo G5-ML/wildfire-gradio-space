@@ -1,19 +1,23 @@
 """
-Wildfire Detection - Gradio Space / Colab Deployment
-=====================================================
-Upload a satellite/aerial image -> EfficientNetV2B0 classifies it as
-wildfire / no-wildfire, with a Grad-CAM heatmap showing which region of
-the image the model actually looked at.
+PyroVision - wildfire detection from satellite & aerial imagery.
+================================================================
+Upload a frame -> EfficientNetV2B0 classifies it as wildfire / no-wildfire,
+with a Grad-CAM heatmap showing which region of the image the model actually
+looked at.
+
+Presentation (theme, CSS, HTML fragments) lives in `ui.py` / `style.css`.
 """
 
 import json
 import os
+import time
 
 import gradio as gr
 import numpy as np
 import tensorflow as tf
 from PIL import Image
 
+import ui
 from gradcam import make_gradcam_heatmap, overlay_heatmap, find_last_spatial_layer
 
 # ---------------------------------------------------------------------------
@@ -90,240 +94,195 @@ def _preprocess(image: Image.Image) -> np.ndarray:
     return np.expand_dims(arr, axis=0)
 
 
-def _verdict_card(prob_wildfire: float) -> str:
-    is_wildfire = prob_wildfire >= DECISION_THRESHOLD
-    confidence = prob_wildfire if is_wildfire else (1 - prob_wildfire)
-    pct = confidence * 100
-
-    if is_wildfire:
-        label, css_class, icon = "WILDFIRE DETECTED", "verdict-fire", "🔥"
-    else:
-        label, css_class, icon = "NO WILDFIRE DETECTED", "verdict-safe", "✅"
-
-    note = ""
-    if is_wildfire and prob_wildfire < 0.5:
-        note = (
-            '<div class="verdict-note">Flagged cautiously - this model is '
-            "tuned to favor catching real fires over avoiding false "
-            "alarms.</div>"
-        )
-
-    return f"""
-    <div class="verdict-card {css_class}">
-        <div class="verdict-icon">{icon}</div>
-        <div class="verdict-label">{label}</div>
-        <div class="verdict-confidence">{pct:.1f}% confidence</div>
-        {note}
-    </div>
-    """
-
-
-def _likelihood_bar(prob_wildfire: float) -> str:
-    pct = prob_wildfire * 100
-    threshold_pct = DECISION_THRESHOLD * 100
-    unfilled_pct = 100 - pct  # width of the dark mask, not the color
-
-    return f"""
-    <div class="likelihood-block">
-        <div class="likelihood-row">
-            <span>Wildfire likelihood</span>
-            <span class="likelihood-pct">{pct:.1f}%</span>
-        </div>
-        <div class="likelihood-track">
-            <div class="likelihood-fill" style="width:{unfilled_pct:.2f}%;"></div>
-            <div class="likelihood-marker" style="left:{threshold_pct:.2f}%;"
-                 title="Alert line - the model flags anything past this point"></div>
-        </div>
-        <div class="likelihood-scale">
-            <span>No wildfire</span>
-            <span>Wildfire</span>
-        </div>
-    </div>
-    """
+def _no_overlay():
+    """Evidence panel in its pre-result shape: slider away, placeholder up."""
+    return gr.update(value=None, visible=False), gr.update(visible=True)
 
 
 def predict(image: Image.Image):
+    """Stream three UI states: idle -> scanning -> result.
+
+    This is a generator so the scanning animation reaches the browser the
+    moment the frame lands, instead of only after inference finishes.
+    """
     if image is None:
-        return (
-            "<div class='hint-card'>Upload an image to get started.</div>",
-            "",
-            None,
-        )
+        yield ui.empty_state(), "", "", *_no_overlay()
+        return
 
     if _model is None:
-        return (
-            f"<div class='error-card'>⚠️ Model not loaded: {_model_error}</div>",
-            "",
-            None,
-        )
+        yield ui.error_card(_model_error or "unknown error"), "", "", *_no_overlay()
+        return
 
+    yield ui.scanning_state(), "", "", *_no_overlay()
+
+    started = time.perf_counter()
     img_batch = _preprocess(image)
     heatmap, prob_wildfire = make_gradcam_heatmap(img_batch, _model, _target_layer)
     overlay = overlay_heatmap(heatmap, image, alpha=0.45, colormap_name="inferno")
+    elapsed = time.perf_counter() - started
 
-    return _verdict_card(prob_wildfire), _likelihood_bar(prob_wildfire), overlay
+    yield (
+        ui.verdict_card(prob_wildfire, DECISION_THRESHOLD),
+        ui.meter(prob_wildfire, DECISION_THRESHOLD),
+        ui.metrics(prob_wildfire, DECISION_THRESHOLD, elapsed, MODEL_NAME),
+        gr.update(value=(image.convert("RGB"), overlay), visible=True),
+        gr.update(visible=False),
+    )
+
+
+def reset():
+    """Clear the frame and put every output slot back to its idle state."""
+    return None, ui.empty_state(), "", "", *_no_overlay()
 
 
 # ---------------------------------------------------------------------------
-# UI - dark, wildfire-themed
+# UI
 # ---------------------------------------------------------------------------
-CUSTOM_CSS = """
-:root {
-    --ember-orange: #ff6a3d;
-    --ember-gold: #ffb347;
-    --smoke-dark: #14100e;
-    --smoke-panel: #201a17;
-    --smoke-panel-2: #241d19;
-    --smoke-border: #3a2a22;
-    --smoke-text: #f2e9e4;
-    --smoke-muted: #b8a89f;
-    --safe-green: #4ade80;
-    --fire-red: #ff5252;
-}
+with gr.Blocks(title=f"{ui.BRAND} - Wildfire Detection") as demo:
+    # Fixed, non-interactive backdrop. Rendered first so it paints behind
+    # everything else; #pv-app is lifted above it in style.css.
+    gr.HTML(ui.ambient_layer(), elem_id="pv-ambient-host",
+            container=False, padding=False)
 
-.gradio-container {
-    background: radial-gradient(circle at 15% -10%, #2c1810 0%, #120d0b 55%) !important;
-    color: var(--smoke-text) !important;
-}
-
-#app-title { text-align: center; padding: 8px 0 0 0; }
-#app-title h1 {
-    font-size: 2.3rem; font-weight: 800; margin-bottom: 2px;
-    background: linear-gradient(90deg, var(--ember-gold), var(--ember-orange) 60%, #d7263d);
-    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
-}
-#app-subtitle { text-align: center; color: var(--smoke-muted) !important; margin-top: -6px; }
-
-.panel {
-    background: var(--smoke-panel) !important;
-    border: 1px solid var(--smoke-border) !important;
-    border-radius: 18px !important; padding: 14px !important;
-}
-
-#analyze-btn {
-    background: linear-gradient(90deg, var(--ember-orange), var(--ember-gold)) !important;
-    border: none !important; color: #1a1210 !important;
-    font-weight: 700 !important; font-size: 1.02rem !important;
-    box-shadow: 0 6px 18px rgba(255, 106, 61, 0.25);
-}
-
-.verdict-card {
-    text-align: center; border-radius: 18px; padding: 22px 16px;
-    border: 1px solid var(--smoke-border); background: var(--smoke-panel-2);
-}
-.verdict-icon { font-size: 2.4rem; line-height: 1; margin-bottom: 4px; }
-.verdict-label { font-size: 1.35rem; font-weight: 800; letter-spacing: 0.02em; }
-.verdict-confidence { color: var(--smoke-muted); margin-top: 4px; font-size: 0.95rem; }
-.verdict-card.verdict-fire .verdict-label { color: var(--fire-red); }
-.verdict-card.verdict-safe .verdict-label { color: var(--safe-green); }
-.verdict-note {
-    margin-top: 10px; font-size: 0.8rem; color: var(--smoke-muted);
-    border-top: 1px dashed var(--smoke-border); padding-top: 8px;
-}
-
-.likelihood-block { padding: 4px 6px; }
-.likelihood-row {
-    display: flex; justify-content: space-between;
-    font-size: 0.9rem; color: var(--smoke-muted); margin-bottom: 6px;
-}
-.likelihood-pct { color: var(--smoke-text); font-weight: 700; }
-.likelihood-track {
-    position: relative; width: 100%; height: 14px; border-radius: 999px;
-    background: linear-gradient(90deg, #4ade80 0%, #ffb347 55%, #ff5252 100%);
-    overflow: hidden; border: 1px solid var(--smoke-border);
-}
-.likelihood-fill {
-    position: absolute; top: 0; right: 0; bottom: 0;
-    background: rgba(20, 16, 14, 0.65); /* dims the not-yet-reached zone */
-    border-radius: 0 999px 999px 0;
-    transition: width 0.4s ease;
-}
-.likelihood-marker {
-    position: absolute; top: -3px; bottom: -3px; width: 2px;
-    background: var(--smoke-text); opacity: 0.85; transform: translateX(-1px);
-}
-.likelihood-marker::after {
-    content: ""; position: absolute; left: 50%; top: -4px;
-    width: 6px; height: 6px; border-radius: 50%;
-    background: var(--smoke-text); transform: translateX(-50%);
-}
-.likelihood-scale {
-    display: flex; justify-content: space-between;
-    font-size: 0.75rem; color: var(--smoke-muted); margin-top: 4px;
-}
-
-.hint-card, .error-card {
-    text-align: center; padding: 24px; border-radius: 14px;
-    border: 1px dashed var(--smoke-border); color: var(--smoke-muted);
-}
-.error-card { color: var(--fire-red); border-color: var(--fire-red); }
-
-#footer-note {
-    text-align: center; color: var(--smoke-muted) !important;
-    font-size: 0.82rem; margin-top: 6px;
-}
-"""
-
-with gr.Blocks(
-    title="Wildfire Detection - EfficientNetV2B0",
-    css=CUSTOM_CSS,
-    theme=gr.themes.Base(primary_hue="orange", neutral_hue="stone"),
-) as demo:
-    with gr.Column(elem_id="app-title"):
-        gr.Markdown("# 🔥 Wildfire Detection")
-        gr.Markdown(
-            "EfficientNetV2B0 classifier with Grad-CAM explainability",
-            elem_id="app-subtitle",
+    with gr.Column(elem_id="pv-app"):
+        gr.HTML(
+            ui.topbar(
+                model_ok=_model is not None,
+                model_name=MODEL_NAME,
+                threshold=DECISION_THRESHOLD,
+            ),
+            container=False,
+            padding=False,
         )
+        gr.HTML(ui.hero(), container=False, padding=False)
+        gr.HTML(ui.rail(), container=False, padding=False)
 
-    with gr.Row():
-        with gr.Column(scale=1):
-            with gr.Group(elem_classes="panel"):
-                image_input = gr.Image(
-                    type="pil",
-                    label="Upload a satellite / aerial image",
-                    height=340,
-                )
-                analyze_btn = gr.Button(
-                    "🔍 Analyze Image", elem_id="analyze-btn", size="lg"
-                )
+        with gr.Row(equal_height=False):
+            # ---------------------------------------------------- input ---
+            with gr.Column(scale=5):
+                with gr.Column(elem_classes="pv-card"):
+                    gr.HTML(
+                        ui.card_head("image", "Source frame", chip="step 01"),
+                        container=False,
+                        padding=False,
+                    )
+                    with gr.Column(elem_classes="pv-drop", elem_id="pv-drop"):
+                        image_input = gr.Image(
+                            type="pil",
+                            label="Satellite or aerial image",
+                            show_label=False,
+                            height=330,
+                            sources=["upload", "clipboard"],
+                            buttons=["fullscreen"],
+                            container=False,
+                            # "#" makes the first line a heading; Gradio
+                            # renders this in place of its default copy.
+                            placeholder=(
+                                "# Drop a frame here\n"
+                                "or click to browse your files"
+                            ),
+                        )
+                    analyze_btn = gr.Button(
+                        "Run wildfire analysis",
+                        elem_id="pv-analyze",
+                        size="lg",
+                        variant="primary",
+                    )
+                    reset_btn = gr.Button(
+                        "Clear frame", elem_id="pv-reset", size="lg"
+                    )
 
-        with gr.Column(scale=1):
-            with gr.Group(elem_classes="panel"):
-                verdict_output = gr.HTML(
-                    "<div class='hint-card'>Upload an image to get started.</div>"
-                )
-                likelihood_output = gr.HTML("")
+            # --------------------------------------------------- output ---
+            with gr.Column(scale=6):
+                with gr.Column(elem_classes="pv-card"):
+                    gr.HTML(
+                        ui.card_head("gauge", "Assessment", chip="step 02"),
+                        container=False,
+                        padding=False,
+                    )
+                    verdict_output = gr.HTML(
+                        ui.empty_state(), container=False, padding=False
+                    )
+                    meter_output = gr.HTML("", container=False, padding=False)
+                    metrics_output = gr.HTML("", container=False, padding=False)
 
-    with gr.Group(elem_classes="panel"):
-        gr.Markdown("### 🌡️ Grad-CAM Heatmap")
-        gr.Markdown(
-            "Warmer colors show the image regions that most influenced the "
-            "model's decision.",
-            elem_id="footer-note",
-        )
-        gradcam_output = gr.Image(label="Grad-CAM overlay", height=420)
+        # ------------------------------------------------------ evidence ---
+        with gr.Column(elem_classes="pv-card"):
+            gr.HTML(
+                ui.card_head(
+                    "layers",
+                    "Grad-CAM evidence",
+                    chip="step 03",
+                ),
+                container=False,
+                padding=False,
+            )
+            gradcam_placeholder = gr.HTML(
+                ui.gradcam_placeholder(), container=False, padding=False
+            )
+            gradcam_output = gr.ImageSlider(
+                label="Original versus Grad-CAM overlay",
+                show_label=False,
+                height=460,
+                slider_position=55,
+                interactive=False,
+                container=False,
+                visible=False,
+            )
+            gr.HTML(ui.gradcam_legend(), container=False, padding=False)
 
-    with gr.Accordion("ℹ️ How this works / limitations", open=False):
-        gr.Markdown(
-            """
-- **Model**: EfficientNetV2B0, fine-tuned on the Wildfire Prediction Dataset.
-- **Grad-CAM**: Highlights pixels the last conv layer relied on most.
-- **Confidence score**: Raw probability P(wildfire).
-- **Research/demo tool only**: Not validated for operational emergency response.
-            """
-        )
+        with gr.Accordion(
+            "How PyroVision works, and where it should not be trusted",
+            open=False,
+            elem_classes="pv-accordion",
+        ):
+            gr.Markdown(
+                f"""
+**Model.** `{MODEL_NAME}`, fine-tuned on the Quebec wildfire prediction
+dataset. Frames are resized to {IMG_SIZE[0]}x{IMG_SIZE[1]} and passed through
+as raw `[0, 255]` pixels - EfficientNetV2's normalisation is baked into the
+architecture itself.
 
-    analyze_btn.click(
-        fn=predict,
-        inputs=image_input,
-        outputs=[verdict_output, likelihood_output, gradcam_output],
-    )
-    image_input.change(
-        fn=predict,
-        inputs=image_input,
-        outputs=[verdict_output, likelihood_output, gradcam_output],
-    )
+**Grad-CAM.** The heatmap comes from gradients of the wildfire score with
+respect to the last spatial feature map, so it shows the regions that pushed
+the score up. Bright areas are evidence *for* the verdict, not a fire
+perimeter.
+
+**Alert line.** The decision threshold is {DECISION_THRESHOLD:.3f}, tuned to
+optimise F-beta with beta=2. That deliberately favours recall: a missed
+wildfire costs far more than a second look at a false alarm. A frame can
+therefore be flagged while `P(wildfire)` is still under 0.5.
+
+**Limits.** This is a research and demonstration tool trained on one public
+satellite-imagery dataset. It has not been validated for operational
+emergency response and must not be used for real-world safety decisions.
+Smoke, cloud, sunset light and burn scars are all known confusers.
+                """
+            )
+
+        gr.HTML(ui.footer(), container=False, padding=False)
+
+    # ------------------------------------------------------------ wiring ---
+    outputs = [
+        verdict_output,
+        meter_output,
+        metrics_output,
+        gradcam_output,
+        gradcam_placeholder,
+    ]
+    analyze_btn.click(fn=predict, inputs=image_input, outputs=outputs)
+    image_input.change(fn=predict, inputs=image_input, outputs=outputs)
+    reset_btn.click(fn=reset, inputs=None, outputs=[image_input, *outputs])
+
 
 if __name__ == "__main__":
-    demo.launch(share=True)
+    demo.launch(
+        share=True,
+        theme=ui.pyrovision_theme(),
+        css_paths=[ui.CSS_PATH],
+        head=ui.HEAD,
+        favicon_path=str(ui.LOGO_PATH) if ui.LOGO_PATH.exists() else None,
+        # The page carries its own branded footer; Gradio's default link row
+        # would sit underneath it saying the same thing twice.
+        footer_links=["api"],
+    )
