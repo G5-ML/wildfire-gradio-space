@@ -121,8 +121,6 @@ def _verdict_card(prob_wildfire: float) -> str:
 def _likelihood_bar(prob_wildfire: float) -> str:
     pct = prob_wildfire * 100
     threshold_pct = DECISION_THRESHOLD * 100
-    unfilled_pct = 100 - pct  # width of the dark mask, not the color
-
     return f"""
     <div class="likelihood-block">
         <div class="likelihood-row">
@@ -130,7 +128,7 @@ def _likelihood_bar(prob_wildfire: float) -> str:
             <span class="likelihood-pct">{pct:.1f}%</span>
         </div>
         <div class="likelihood-track">
-            <div class="likelihood-fill" style="width:{unfilled_pct:.2f}%;"></div>
+            <div class="likelihood-fill" style="width:{pct:.2f}%;"></div>
             <div class="likelihood-marker" style="left:{threshold_pct:.2f}%;"
                  title="Alert line - the model flags anything past this point"></div>
         </div>
@@ -229,13 +227,11 @@ CUSTOM_CSS = """
 .likelihood-pct { color: var(--smoke-text); font-weight: 700; }
 .likelihood-track {
     position: relative; width: 100%; height: 14px; border-radius: 999px;
-    background: linear-gradient(90deg, #4ade80 0%, #ffb347 55%, #ff5252 100%);
-    overflow: hidden; border: 1px solid var(--smoke-border);
+    background: #2b2320; overflow: visible; border: 1px solid var(--smoke-border);
 }
 .likelihood-fill {
-    position: absolute; top: 0; right: 0; bottom: 0;
-    background: rgba(20, 16, 14, 0.65); /* dims the not-yet-reached zone */
-    border-radius: 0 999px 999px 0;
+    height: 100%; border-radius: 999px; overflow: hidden;
+    background: linear-gradient(90deg, #4ade80 0%, #ffb347 55%, #ff5252 100%);
     transition: width 0.4s ease;
 }
 .likelihood-marker {
